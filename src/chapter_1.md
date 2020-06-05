@@ -1,9 +1,9 @@
-# Perface
+# 前言
 
-Today I decided to write a guide for a newbie to understand [tikv](https://github.com/tikv/tikv)'s code.
+今天我决定写一些为**纯萌新**准备的 [tikv](https://github.com/tikv/tikv) 源码阅读指南。
 
-Yes, I know there're already a series of source code analyzing [here](https://pingcap.com/blog-cn/#TiKV-%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90) and [here](https://tikv.org/deep-dive/), these are awesome learning resources. This book won't replace these. But I think since these articles are written by experienced tikv contributors, it might be affected by the [Curse of Knowledge](https://en.wikipedia.org/wiki/Curse_of_knowledge). As for me, there're many things I want to know which are not covered in these articals.
+我知道已经有很多现有的 tikv 源码分析了，如 [TiKV-源码解析](https://pingcap.com/blog-cn/#TiKV-%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90)系列和 [deep dive tikv](https://tikv.org/deep-dive/) 系列，这些都是用于理解 tikv 源码的权威资料。这份资料的目的当然不在于替代它们。但是我认为因为以上这些文章都是由资深的 tikv contributor 所写，可能存在 “知识的诅咒”。至少对于我来说，这些文章并没有包含一些我想要知道的内容。
 
-So I'll try to write this book **during** I read the source code. I wish this book can be a good learning resouce for those who wish to contribute or learn the source code of tikv.
+所以我在阅读 tikv 源码的过程**中**我写了这份资料。我希望这份资料对于希望对 tikv 作出贡献或是理解其代码的新手有所帮助。
 
-But since I'm new in tikv I cannot promise there're no mistakes in this book, so please read the book **with** the source code and other resources. And feel free to communicate with the author if you found any problems.
+然而，由于我也是纯萌新，我不能保证本书中没有错误，所以请**以权威资料和代码为准**。若您发现书中有任何错误，欢迎您联系作者。
