@@ -26,4 +26,4 @@ jobs:
       with:
         # The github reposistory in `owner/repo` format.
         repository: longfangsong/tikv-newbie
-        token: f467eaa6e117af3ecf426c0bcb072899247e1b50
+        token: d9100d9309965a922ad5db73c0d6a74badca7d0e
