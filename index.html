@@ -81,7 +81,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="perface.html"><strong aria-hidden="true">1.</strong> 前言</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="perface.html">前言</a></li><li class="chapter-item expanded affix "><a href="overview.html">源码结构</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -150,7 +150,7 @@
                         <h1><a class="header" href="#前言" id="前言">前言</a></h1>
 <p>今天我决定写一些为<strong>纯萌新</strong>准备的 <a href="https://github.com/tikv/tikv">tikv</a> 源码阅读指南。</p>
 <p>我知道已经有很多现有的 tikv 源码分析了，如 <a href="https://pingcap.com/blog-cn/#TiKV-%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90">TiKV-源码解析</a>系列和 <a href="https://tikv.org/deep-dive/">deep dive tikv</a> 系列，这些都是用于理解 tikv 源码的权威资料。这份资料的目的当然不在于替代它们。但是我认为因为以上这些文章都是由资深的 tikv contributor 所写，可能存在 “知识的诅咒”。至少对于我来说，这些文章并没有包含一些我想要知道的内容。</p>
-<p>所以我在阅读 tikv 源码的过程<strong>中</strong>我写了这份资料。我希望这份资料对于希望对 tikv 作出贡献或是理解其代码的新手有所帮助。</p>
+<p>所以我在阅读 tikv 源码的<strong>过程中</strong>我写了这份资料。我希望这份资料对于希望对 tikv 作出贡献或是理解其代码的新手有所帮助。</p>
 <p>然而，由于我也是纯萌新，我不能保证本书中没有错误，所以请<strong>以权威资料和代码为准</strong>。若您发现书中有任何错误，欢迎您联系作者。</p>
 
                     </main>
@@ -159,6 +159,10 @@
                         <!-- Mobile navigation buttons -->
                         
 
+                        
+                            <a rel="next" href="overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
                         
 
                         <div style="clear: both"></div>
@@ -169,6 +173,10 @@
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
                 
 
+                
+                    <a rel="next" href="overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
                 
             </nav>
 
