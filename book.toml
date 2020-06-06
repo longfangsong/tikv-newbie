@@ -1,6 +1,6 @@
 [book]
 authors = ["longfangsong"]
 language = "cn"
-multilingual = false
+multilingual = true
 src = "src"
 title = "tikv-newbie"
