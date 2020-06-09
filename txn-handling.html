@@ -3,9 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>tikv-newbie</title>
-        
-        <meta name="robots" content="noindex" />
+        <title>事务处理流程 - tikv-newbie</title>
         
 
         <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
@@ -83,7 +81,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded affix "><a href="perface.html">前言</a></li><li class="chapter-item expanded affix "><a href="overview.html">源码结构</a></li><li class="chapter-item expanded affix "><a href="txn-handling.html">事务处理流程</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded affix "><a href="perface.html">前言</a></li><li class="chapter-item expanded affix "><a href="overview.html">源码结构</a></li><li class="chapter-item expanded affix "><a href="txn-handling.html" class="active">事务处理流程</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
         </nav>
@@ -149,90 +147,16 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1><a class="header" href="#前言" id="前言">前言</a></h1>
-<p>今天我决定写一些为<strong>纯萌新</strong>准备的 <a href="https://github.com/tikv/tikv">tikv</a> 源码阅读指南。</p>
-<p>我知道已经有很多现有的 tikv 源码分析了，如 <a href="https://pingcap.com/blog-cn/#TiKV-%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90">TiKV-源码解析</a>系列和 <a href="https://tikv.org/deep-dive/">deep dive tikv</a> 系列，这些都是用于理解 tikv 源码的权威资料。这份资料的目的当然不在于替代它们。但是我认为因为以上这些文章都是由资深的 tikv contributor 所写，可能存在 “知识的诅咒”。至少对于我来说，这些文章并没有包含一些我想要知道的内容。</p>
-<p>所以我在阅读 tikv 源码的<strong>过程中</strong>我写了这份资料。我希望这份资料对于希望对 tikv 作出贡献或是理解其代码的新手有所帮助。</p>
-<p>然而，由于我也是纯萌新，我不能保证本书中没有错误，所以请<strong>以权威资料和代码为准</strong>。若您发现书中有任何错误，欢迎您联系作者。</p>
-<h1><a class="header" href="#源码结构" id="源码结构">源码结构</a></h1>
-<p>从 <a href="https://github.com/tikv/tikv">官方GitHub地址</a> clone下一份tikv的源码，您会看到洋洋洒洒的一堆文件（夹）：</p>
-<p><img src="overview/dir.png" alt="dir" /></p>
-<p>但是不要慌张，其中大部分都不是代码，而代码中很多都是不用特别去关心的小代码。</p>
-<p>现将各个文件夹以及部分子文件夹的作用进行介绍。</p>
-<h2><a class="header" href="#cmd" id="cmd">cmd</a></h2>
-<p>如果你尝试过 build tikv，那你应该知道会产出两个二进制文件：实际的 tikv 服务器 <code>tikv-server</code> 和 用于控制 tikv 的 <code>tikv-ctl</code>。而这两个二进制文件的 <code>main</code> 就在这个 crate 里。</p>
-<h2><a class="header" href="#components" id="components">components</a></h2>
-<p>作为单独出来的 crate 的tikv的源码。至于为什么是这些部分被单独出来……我也不知道啊TAT。也许我该问问公司的前辈们。</p>
-<h3><a class="header" href="#backup" id="backup">backup</a></h3>
-<p>备份用组件。</p>
-<h3><a class="header" href="#batch-system" id="batch-system">batch-system</a></h3>
-<p>和 raft store 有关系，暂时看不透。</p>
-<h3><a class="header" href="#cdc" id="cdc">cdc</a></h3>
-<p>看不透。</p>
-<h3><a class="header" href="#codec" id="codec">codec</a></h3>
-<p>用于 encode、decode 数字等。</p>
-<h3><a class="header" href="#configuration" id="configuration">configuration</a></h3>
-<p>用来 “patch” 配置设置，这个子 crate 很好，可以用在你自己的 rust 项目中。</p>
-<h3><a class="header" href="#encryption" id="encryption">encryption</a></h3>
-<p>用于加解密。</p>
-<h3><a class="header" href="#engin-engin_" id="engin-engin_">engin, engin_*</a></h3>
-<p>单机的存储引擎。</p>
-<h3><a class="header" href="#externel-storage" id="externel-storage">externel storage</a></h3>
-<p>外部存储，<strong>似乎</strong>是一些和云存储相关的东西。</p>
-<h3><a class="header" href="#into_other" id="into_other">into_other</a></h3>
-<p>看不透，不过好像是个细节问题。</p>
-<h3><a class="header" href="#keys" id="keys">keys</a></h3>
-<p>对 key 的各种修饰。</p>
-<h3><a class="header" href="#log_wrappers" id="log_wrappers">log_wrappers</a></h3>
-<p>似乎是用来将没有实现 slog 接口的 log 系统 wrap 起来。</p>
-<h3><a class="header" href="#match-templates" id="match-templates">match templates</a></h3>
-<p>用来便捷地生成对多种 enum 的子类型的相似 match branch的代码的宏，这个子 crate 也很适合用在你自己的 rust 项目中。</p>
-<h3><a class="header" href="#panic-hook" id="panic-hook">panic hook</a></h3>
-<p>用于在测试等场景下防止打印出调用堆栈。</p>
-<h3><a class="header" href="#pd_client" id="pd_client">pd_client</a></h3>
-<p>用于链接 placement driver。</p>
-<h3><a class="header" href="#profiler" id="profiler">profiler</a></h3>
-<p>性能分析工具。</p>
-<h3><a class="header" href="#raft-store" id="raft-store">raft store</a></h3>
-<p>知道有这东西，但是看不透。</p>
-<h3><a class="header" href="#resolved_ts" id="resolved_ts">resolved_ts</a></h3>
-<p>看不透。</p>
-<h3><a class="header" href="#rusoto_util" id="rusoto_util">rusoto_util</a></h3>
-<p>似乎和安全有关，看不透。</p>
-<h3><a class="header" href="#security" id="security">security</a></h3>
-<p>SSL相关。</p>
-<h3><a class="header" href="#sst_importer" id="sst_importer">sst_importer</a></h3>
-<p>用于导入 RocksDB 的 SST 文件。应该是用于使用 <code>lightning</code> 高速导入数据的。</p>
-<h3><a class="header" href="#test_" id="test_">test_*</a></h3>
-<p>功能测试。</p>
-<h3><a class="header" href="#tidb_query_" id="tidb_query_">tidb_query_*</a></h3>
-<p>用于处理 tidb 下推的运算，包括向量化执行等等。</p>
-<h3><a class="header" href="#tikv_alloc" id="tikv_alloc">tikv_alloc</a></h3>
-<p>内存分配器，支持 <code>tcmalloc</code>、<code>jemalloc</code> 等。</p>
-<h3><a class="header" href="#tikv_util" id="tikv_util">tikv_util</a></h3>
-<p>不便归到其他类的工具代码。</p>
-<h3><a class="header" href="#tipb_helper" id="tipb_helper">tipb_helper</a></h3>
-<p>和 tidb 中的 protobuf 有关，暂时看不透。</p>
-<h3><a class="header" href="#txn_types" id="txn_types">txn_types</a></h3>
-<p>事务处理中使用的一些类型。</p>
-<h2><a class="header" href="#fuzz" id="fuzz">fuzz</a></h2>
-<p>模糊测试。</p>
-<h2><a class="header" href="#src" id="src">src</a></h2>
-<p>tikv 的主体代码部分。</p>
-<h3><a class="header" href="#coprocessor" id="coprocessor">coprocessor</a></h3>
-<p>处理 tidb 推下来的请求。</p>
-<h3><a class="header" href="#import" id="import">import</a></h3>
-<p><code>tidb-lightning</code> 的支持。</p>
-<h3><a class="header" href="#server" id="server">server</a></h3>
-<p>对外服务的 server 代码。</p>
-<h3><a class="header" href="#storage" id="storage">storage</a></h3>
-<p>存储层，包括单机kv存储引擎、mvcc 及事务控制等。</p>
-<h1><a class="header" href="#事务处理流程" id="事务处理流程">事务处理流程</a></h1>
+                        <h1><a class="header" href="#事务处理流程" id="事务处理流程">事务处理流程</a></h1>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                        
+                            <a rel="prev" href="overview.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
                         
 
                         
@@ -243,6 +167,10 @@
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                
+                    <a rel="prev" href="overview.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
                 
 
                 
@@ -277,14 +205,6 @@
         <!-- Custom JS scripts -->
         
 
-        
-        
-        <script type="text/javascript">
-        window.addEventListener('load', function() {
-            window.setTimeout(window.print, 100);
-        });
-        </script>
-        
         
 
     </body>
