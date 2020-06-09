@@ -1,7 +1,3 @@
----
-srcVersion: b82e7e7eff678c2b5189facca08a7deb6bacc595
----
-
 # 源码结构
 
 从 [官方GitHub地址](https://github.com/tikv/tikv) clone下一份tikv的源码，您会看到洋洋洒洒的一堆文件（夹）：
