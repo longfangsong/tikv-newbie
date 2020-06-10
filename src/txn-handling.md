@@ -1,24 +1,22 @@
 # 事务处理流程
 
-本文将以带事务的请求处理为例，告诉读者一个请求是如何从上到下被 tikv 处理的。
+本文将以带事务的请求处理为例，告诉读者一个请求是如何从上到下被 TiKV 处理的。
 
 TiDB-TiKV 组成的系统中，处理请求的模型大致如下所示：
 
 ![architecture](handling/architecture.svg)
 
-client 端虽然不是 tikv 的一部分，但对理解一个请求是如何被 tikv 处理的至关重要。
+client 端虽然不是 TiKV 的一部分，但对理解一个请求是如何被 TiKV 处理的至关重要。
 
-无论是 TiDB 还是各种语言的client，其发起事务请求的流程都是相似的，此处采用较为容易理解的 client-rust ，对其进行分析。
+无论是 TiDB 还是各种语言的client，其发起事务请求的流程都是相似的，此处采用较为容易理解的 [client-rust](https://github.com/TiKV/client-rust) ，对其进行分析。
 
 基本上 TiKV 的事务系统是基于 Google 的 [Percolator](https://research.google/pubs/pub36726/) ，建议你在试图理解 TiKV 的事务模型前先对其有一定了解。
 
-### 准备阶段
+### 开始事务
 
 首先，需要创建一个 client，这个 client 包含了与 pd 组件通信的 `PdRpcClient`。
 
 这部分代码在：`client-rust` 的 `src/transaction/client.rs` 中的 `Client::new`。
-
-### 开始事务
 
 使用 `Client::begin` 开始一个事务。
 
@@ -54,25 +52,29 @@ pub async fn get(&self, key: impl Into<Key>) -> Result<Option<Value>> {
 }
 ```
 
-首先试图从本地缓存中读取（由本事务提交的）内容，否则就 rpc 调用 [`KvGet`](https://github.com/pingcap/kvproto/blob/6650270c39c357d46ba3f24631a44410aff2f2f8/proto/tikvpb.proto) 来进行读取。
+首先试图从本地缓存中读取（由本事务提交的）内容，否则就 rpc 调用 [`KvGet`](https://github.com/pingcap/kvproto/blob/6650270c39c357d46ba3f24631a44410aff2f2f8/proto/TiKVpb.proto) 来进行读取。
 
-你可能已经知道了，tikv 将数据分为多个 region，每个 region 的几个副本都放在不同的 tikv 实例上，通过pd来确定每个 key 在哪里，但这里的代码没有体现“确定数据在哪个 region /哪个 tikv 实例”的步骤。
+你可能已经知道了，TiKV 将数据分为多个 region，每个 region 的几个副本都放在不同的 TiKV 实例上，通过pd来确定每个 key 在哪里。
 
-其实是这里的 `execute` 却“暗藏玄机”：一路从 `KvRequest::execute` -> `response_stream` -> `retry_response_stream` -> `store_stream` -> `store_stream_for_key` 跟踪下去，你最终会发现通过 `store_for_key` -> `PdClient::region_for_key` -> `Cluster::get_region` -> grpc 调用 [`GetRegion`](https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/pdpb.proto#L41) ，我们能将 key 对应的 region 找出来。
+这里的代码似乎没有体现“确定数据在哪个 region /哪个 TiKV 实例”的步骤。
+
+But that's not ture. The code which do these jobs is hidden under [execute](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L33), and you'll find the the code which tries to get the TiKV node [here](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/pd/client.rs#L42) , and it is called by retry_response_stream [here](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L52):
+
+但是实际上这部分代码藏在[execute](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L33)下，你可以发现 `retry_response_stream` 在[这里](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L52)调用了获取 TiKV 地址的代码。
 
 `GetRegion` 的实现在 pd 的[这里](https://github.com/pingcap/pd/blob/2b56a4c5915cb4b8806629193fd943a2e860ae4f/server/grpc_service.go#L414)。
 
-然后回到 `store_for_key` ，这里会再调用一个 `map_region_to_store` ，最终通过 grpc 调用了 [GetStore](https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/pdpb.proto#L31)，将 region 对应的 Store （tikv 实例，体现为一个 `KVClient`）找到。
+然后回到 `store_for_key` ，这里会再调用一个 `map_region_to_store` ，最终通过 grpc 调用了 [GetStore](https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/pdpb.proto#L31)，将 region 对应的 Store （TiKV 实例，体现为一个 `KVClient`）找到。
 
 `GetStore` 的实现在 pd 的[这里](https://github.com/pingcap/pd/blob/2b56a4c5915cb4b8806629193fd943a2e860ae4f/server/grpc_service.go#L171)。
 
-终于我们拿到了 key 所在的 `KVClient` 了，我们可以用这个 client 向 tikv 副本请求 key 对应的 value 了。
+终于我们拿到了 key 所在的 `KVClient` 了，我们可以用这个 client 向 TiKV 副本请求 key 对应的 value 了。
 
-我们回到 `retry_response_stream`，下一个我们要关心的函数调用是 `store.dispatch` ，这个函数为啥要这样实现我有点看不透，总之它达到的效果就是 grpc 调用 [`KvGet`](https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/tikvpb.proto#L21)。
+我们回到 `retry_response_stream`，下一个我们要关心的函数调用是 `store.dispatch` ，这个函数为啥要这样实现我有点看不透，总之它达到的效果就是 grpc 调用 [`KvGet`](https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/TiKVpb.proto#L21)。
 
-然后，我们终于到达了 tikv 仓库， tikv 中，请求由[ `Server` 结构](https://github.com/tikv/tikv/blob/e3058403a0fc9a96870882bf184ac075223b4642/src/server/server.rs#L48) 进行处理，我们要看的 `KvGet` 请求会被打到[这里](https://github.com/tikv/tikv/blob/1de029631e09a3f9989a468a9cb4b97ec4db440e/src/server/service/kv.rs#L1155)。
+然后，我们终于到达了 TiKV 仓库， TiKV 中，请求由[ `Server` 结构](https://github.com/TiKV/TiKV/blob/e3058403a0fc9a96870882bf184ac075223b4642/src/server/server.rs#L48) 进行处理，我们要看的 `KvGet` 请求会被打到[这里](https://github.com/TiKV/TiKV/blob/1de029631e09a3f9989a468a9cb4b97ec4db440e/src/server/service/kv.rs#L1155)。
 
-我们可以看到我们首先通过[`Storage::get`函数](https://github.com/tikv/tikv/blob/1de029631e09a3f9989a468a9cb4b97ec4db440e/src/storage/mod.rs#L216)来试图读取 `key` 在 `start_ts `下的值。
+我们可以看到我们首先通过[`Storage::get`函数](https://github.com/TiKV/TiKV/blob/1de029631e09a3f9989a468a9cb4b97ec4db440e/src/storage/mod.rs#L216)来试图读取 `key` 在 `start_ts `下的值。
 
 `get` 函数有一点大，我们将其中的测量部分忽略，可以得到：
 
@@ -134,7 +136,7 @@ pub fn get(&mut self, user_key: &Key) -> Result<Option<Value>> {
 }
 ```
 
-我们可以看到，当要求 `Si` 的隔离级别的时候，我们需要检查是否有并发提交的事务中的，和当前事务冲突的锁，如果检测到了，就会返回 `KeyIsLocked` 错误：
+我们可以看到，当要求 `Si` 的隔离级别的时候，我们需要检查是否有锁，如果检测到了，就会返回 `KeyIsLocked` 错误：
 
 ```rust, no_run
 fn load_and_check_lock(&mut self, user_key: &Key) -> Result<()> {
@@ -223,19 +225,19 @@ pub async fn resolve_locks(
 }
 ```
 
-可见是先筛选出已经超过其持有期限的锁，然后逐个解决。其中 `clean_regions` 这里和 region 有什么关系我还没有看透。
+可见是先筛选出已经超过其持有期限的锁，然后逐个解决。
 
 然后就会获取 `lock_version` 对应的 `commit_version` （可能被缓存过），并用来发起 `cleanup_request`。
 
 `Cleanup` 这东西据说4.0之后已经不用了，那我就不管了吧。
 
-然后就是重点：`resolve_lock_with_retry`，这个函数实际构造一个 `ResolveLockRequest`， 并发送给 tikv 执行。
+然后就是重点：`resolve_lock_with_retry`，这个函数实际构造一个 `ResolveLockRequest`， 并发送给 TiKV 执行。
 
-我们转到 tikv 的代码，你会发现这个请求先是被转换为 `TypedCommand`， 然后被 `sched_txn_command` 执行。
+我们转到 TiKV 的代码，你会发现这个请求先是被转换为 `TypedCommand`， 然后被 `sched_txn_command` 执行。
 
-根据 `Request` 上的 `key` 是否为空，会将 `ResolveLockRequest` 转换为 `ResolveLock` 或 `ResolveLockLite`。它们之间区别是 `ResolveLockLite` 只会尝试解决 `Request` 要求解决的那些锁。
+根据 `Request` 上的 `key` 是否为空，会将 `ResolveLockRequest` 转换为 `ResolveLock` 或 `ResolveLockLite`。它们之间区别是 `ResolveLockLite` 只会尝试解决 `Request` 要求解决的那些锁，而 `ResolveLock` 似乎解决了整个 region 上的锁。
 
- `ResolveLock` 这个command实际执行的位置比较难找，我找了好久终于发现它有两段，一段在[这里](https://github.com/tikv/tikv/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/process.rs#L416)，负责读，还有一段在[这里](https://github.com/tikv/tikv/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/process.rs#L775)，负责写，不过[注释](https://github.com/tikv/tikv/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/commands.rs#L520)已经解释了 `ResolveLock` 会做些什么。
+ `ResolveLock` 这个command实际执行的位置比较难找，我找了好久终于发现它有两段，一段在[这里](https://github.com/TiKV/TiKV/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/process.rs#L416)，负责读，还有一段在[这里](https://github.com/TiKV/TiKV/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/process.rs#L775)，负责写，不过[注释](https://github.com/TiKV/TiKV/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/commands.rs#L520)已经解释了 `ResolveLock` 会做些什么。
 
 这两段依赖了 `MvccTxn` 和 `MvccReader`，本次限于篇幅不在展开，将在另外的文章中讲解。
 
