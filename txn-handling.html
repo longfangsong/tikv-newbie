@@ -148,6 +148,216 @@
                 <div id="content" class="content">
                     <main>
                         <h1><a class="header" href="#事务处理流程" id="事务处理流程">事务处理流程</a></h1>
+<p>本文将以带事务的请求处理为例，告诉读者一个请求是如何从上到下被 TiKV 处理的。</p>
+<p>TiDB-TiKV 组成的系统中，处理请求的模型大致如下所示：</p>
+<p><img src="handling/architecture.svg" alt="architecture" /></p>
+<p>client 端虽然不是 TiKV 的一部分，但对理解一个请求是如何被 TiKV 处理的至关重要。</p>
+<p>无论是 TiDB 还是各种语言的client，其发起事务请求的流程都是相似的，此处采用较为容易理解的 <a href="https://github.com/TiKV/client-rust">client-rust</a> ，对其进行分析。</p>
+<p>基本上 TiKV 的事务系统是基于 Google 的 <a href="https://research.google/pubs/pub36726/">Percolator</a> ，建议你在试图理解 TiKV 的事务模型前先对其有一定了解。</p>
+<h3><a class="header" href="#开始事务" id="开始事务">开始事务</a></h3>
+<p>首先，需要创建一个 client，这个 client 包含了与 pd 组件通信的 <code>PdRpcClient</code>。</p>
+<p>这部分代码在：<code>client-rust</code> 的 <code>src/transaction/client.rs</code> 中的 <code>Client::new</code>。</p>
+<p>使用 <code>Client::begin</code> 开始一个事务。</p>
+<p>这部分代码在 <code>src/transaction/client.rs</code> 中。</p>
+<pre><pre class="playpen"><code class="language-rust no_run">
+<span class="boring">#![allow(unused_variables)]
+</span><span class="boring">fn main() {
+</span>pub async fn begin(&amp;self) -&gt; Result&lt;Transaction&gt; {
+	let timestamp = self.current_timestamp().await?;
+	Ok(self.new_transaction(timestamp))
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>可以看出就是用现在的时间戳创建了一个新的 <code>Transaction</code> 对象。</p>
+<p>一路从 <code>self.current_timestamp</code> 跟踪下去，你会发现实际上它是向 <a href="https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/pdpb.proto#L23"><code>PD::tso</code> rpc</a> 的参数流中放入一个请求，并从输出流收到一个 逻辑时间戳。</p>
+<p>进行这个 rpc 调用的代码在 <code>src/pd/timestamp.rs</code> 中。</p>
+<p>调用的远程函数是 pd 的 <code>server/grpc_service.go</code> 中的 <code>Server.Tso</code>。</p>
+<h3><a class="header" href="#单点读" id="单点读">（单点）读</a></h3>
+<p>使用 <code>Client::get</code> 来进行读取一个 key  对应的 value。</p>
+<p>这部分代码在 <code>src/transaction/client.rs</code> 中。</p>
+<pre><pre class="playpen"><code class="language-rust no_run">
+<span class="boring">#![allow(unused_variables)]
+</span><span class="boring">fn main() {
+</span>pub async fn get(&amp;self, key: impl Into&lt;Key&gt;) -&gt; Result&lt;Option&lt;Value&gt;&gt; {
+	let key = key.into();
+	self.buffer.get_or_else(key, |key| {
+		new_mvcc_get_request(key, self.timestamp).execute(self.rpc.clone())
+	}).await
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>首先试图从本地缓存中读取（由本事务提交的）内容，否则就 rpc 调用 <a href="https://github.com/pingcap/kvproto/blob/6650270c39c357d46ba3f24631a44410aff2f2f8/proto/TiKVpb.proto"><code>KvGet</code></a> 来进行读取。</p>
+<p>你可能已经知道了，TiKV 将数据分为多个 region，每个 region 的几个副本都放在不同的 TiKV 实例上，通过pd来确定每个 key 在哪里。</p>
+<p>这里的代码似乎没有体现“确定数据在哪个 region /哪个 TiKV 实例”的步骤。</p>
+<p>But that's not ture. The code which do these jobs is hidden under <a href="https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L33">execute</a>, and you'll find the the code which tries to get the TiKV node <a href="https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/pd/client.rs#L42">here</a> , and it is called by retry_response_stream <a href="https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L52">here</a>:</p>
+<p>但是实际上这部分代码藏在<a href="https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L33">execute</a>下，你可以发现 <code>retry_response_stream</code> 在<a href="https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L52">这里</a>调用了获取 TiKV 地址的代码。</p>
+<p><code>GetRegion</code> 的实现在 pd 的<a href="https://github.com/pingcap/pd/blob/2b56a4c5915cb4b8806629193fd943a2e860ae4f/server/grpc_service.go#L414">这里</a>。</p>
+<p>然后回到 <code>store_for_key</code> ，这里会再调用一个 <code>map_region_to_store</code> ，最终通过 grpc 调用了 <a href="https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/pdpb.proto#L31">GetStore</a>，将 region 对应的 Store （TiKV 实例，体现为一个 <code>KVClient</code>）找到。</p>
+<p><code>GetStore</code> 的实现在 pd 的<a href="https://github.com/pingcap/pd/blob/2b56a4c5915cb4b8806629193fd943a2e860ae4f/server/grpc_service.go#L171">这里</a>。</p>
+<p>终于我们拿到了 key 所在的 <code>KVClient</code> 了，我们可以用这个 client 向 TiKV 副本请求 key 对应的 value 了。</p>
+<p>我们回到 <code>retry_response_stream</code>，下一个我们要关心的函数调用是 <code>store.dispatch</code> ，这个函数为啥要这样实现我有点看不透，总之它达到的效果就是 grpc 调用 <a href="https://github.com/pingcap/kvproto/blob/d4aeb467de2904c19a20a12de47c25213b759da1/proto/TiKVpb.proto#L21"><code>KvGet</code></a>。</p>
+<p>然后，我们终于到达了 TiKV 仓库， TiKV 中，请求由<a href="https://github.com/TiKV/TiKV/blob/e3058403a0fc9a96870882bf184ac075223b4642/src/server/server.rs#L48"> <code>Server</code> 结构</a> 进行处理，我们要看的 <code>KvGet</code> 请求会被打到<a href="https://github.com/TiKV/TiKV/blob/1de029631e09a3f9989a468a9cb4b97ec4db440e/src/server/service/kv.rs#L1155">这里</a>。</p>
+<p>我们可以看到我们首先通过<a href="https://github.com/TiKV/TiKV/blob/1de029631e09a3f9989a468a9cb4b97ec4db440e/src/storage/mod.rs#L216"><code>Storage::get</code>函数</a>来试图读取 <code>key</code> 在 <code>start_ts </code>下的值。</p>
+<p><code>get</code> 函数有一点大，我们将其中的测量部分忽略，可以得到：</p>
+<pre><pre class="playpen"><code class="language-rust no_run">
+<span class="boring">#![allow(unused_variables)]
+</span><span class="boring">fn main() {
+</span>pub fn get(&amp;self, mut ctx: Context, key: Key,
+    start_ts: TimeStamp) -&gt; impl Future&lt;Item = Option&lt;Value&gt;, Error = Error&gt; {
+    const CMD: CommandKind = CommandKind::get;
+    let priority = ctx.get_priority();
+    let priority_tag = get_priority_tag(priority);
+
+    let res = self.read_pool.spawn_handle(
+        async move {
+            // The bypass_locks set will be checked at most once. `TsSet::vec` is more efficient
+            // here.
+            let bypass_locks = TsSet::vec_from_u64s(ctx.take_resolved_locks());
+            let snapshot = Self::with_tls_engine(|engine| Self::snapshot(engine, &amp;ctx)).await?;
+            let snap_store = SnapshotStore::new(snapshot, start_ts,
+                        ctx.get_isolation_level(),
+                        !ctx.get_not_fill_cache(),
+                        bypass_locks,
+                        false);
+            let result = snap_store.get(&amp;key, &amp;mut statistics)
+                    // map storage::txn::Error -&gt; storage::Error
+                    .map_err(Error::from);
+            result
+        },
+        priority,
+        thread_rng().next_u64(),
+    );
+    res.map_err(|_| Error::from(ErrorInner::SchedTooBusy))
+        .flatten()
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p><code>bypass_locks</code> 这一块我还是看不透，那么我们先从<code>snapshot</code> 开始。这个函数会获取 <code>Engine</code>，然后在这个 <code>Engine</code> 上得到一个快照，并用这个快照和相关配置设置构造了一个 <code>SnapshotStore</code> ，然后在这个 <code>SnapshotStore</code> 上调用了 <code>get</code>，拿到了最终的数据。</p>
+<p>仔细观察 <code>SnapshotStore::get</code> 的代码，你会发现它实际上是构造了一个 <code>PointGetter</code> ，然后我们再看 <code>PointGetter</code> 的 <code>get</code> 方法：</p>
+<pre><pre class="playpen"><code class="language-rust no_run">
+<span class="boring">#![allow(unused_variables)]
+</span><span class="boring">fn main() {
+</span>pub fn get(&amp;mut self, user_key: &amp;Key) -&gt; Result&lt;Option&lt;Value&gt;&gt; {
+    if !self.multi {
+        // Protect from calling `get()` multiple times when `multi == false`.
+        if self.drained {
+            return Ok(None);
+        } else {
+            self.drained = true;
+        }
+    }
+
+    match self.isolation_level {
+        IsolationLevel::Si =&gt; {
+            // Check for locks that signal concurrent writes in Si.
+            self.load_and_check_lock(user_key)?;
+        }
+        IsolationLevel::Rc =&gt; {}
+    }
+
+    self.load_data(user_key)
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>我们可以看到，当要求 <code>Si</code> 的隔离级别的时候，我们需要检查是否有锁，如果检测到了，就会返回 <code>KeyIsLocked</code> 错误：</p>
+<pre><pre class="playpen"><code class="language-rust no_run">
+<span class="boring">#![allow(unused_variables)]
+</span><span class="boring">fn main() {
+</span>fn load_and_check_lock(&amp;mut self, user_key: &amp;Key) -&gt; Result&lt;()&gt; {
+    self.statistics.lock.get += 1;
+    let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
+
+    if let Some(ref lock_value) = lock_value {
+        self.statistics.lock.processed += 1;
+        let lock = Lock::parse(lock_value)?;
+        if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
+            self.met_newer_ts_data = NewerTsCheckState::Met;
+        }
+        lock.check_ts_conflict(user_key, self.ts, &amp;self.bypass_locks)
+            .map_err(Into::into)
+    } else {
+        Ok(())
+    }
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>然后我们调用 <code>PointGetter</code> 的 <code>load_data</code> 函数来获取版本对应的值。<code>load_data</code> 我暂时还没有看透。</p>
+<p>接着，我们就将 <code>GetResponse</code> 返回到 client。</p>
+<p>此时得到的 value 已经上面说的这个 <code>GetResponse</code> 里面了，在但 client 仍然会在 <code>retry_response_stream</code> 中处理这一回复来解决锁。</p>
+<h4><a class="header" href="#resolve-locks" id="resolve-locks">Resolve locks</a></h4>
+<p>首先用 <code>take_locks</code>  拿到遇到的锁，然后调用 <code>resolve_locks</code> 尝试解决这些锁：</p>
+<pre><pre class="playpen"><code class="language-rust no_run">
+<span class="boring">#![allow(unused_variables)]
+</span><span class="boring">fn main() {
+</span>pub async fn resolve_locks(
+    locks: Vec&lt;kvrpcpb::LockInfo&gt;,
+    pd_client: Arc&lt;impl PdClient&gt;,
+) -&gt; Result&lt;bool&gt; {
+    let ts = pd_client.clone().get_timestamp().await?;
+    let mut has_live_locks = false;
+    let expired_locks = locks.into_iter().filter(|lock| {
+        let expired = ts.physical - Timestamp::from_version(lock.lock_version).physical
+            &gt;= lock.lock_ttl as i64;
+        if !expired {
+            has_live_locks = true;
+        }
+        expired
+    });
+
+    // records the commit version of each primary lock (representing the status of the transaction)
+    let mut commit_versions: HashMap&lt;u64, u64&gt; = HashMap::new();
+    let mut clean_regions: HashMap&lt;u64, HashSet&lt;RegionVerId&gt;&gt; = HashMap::new();
+    for lock in expired_locks {
+        let primary_key: Key = lock.primary_lock.into();
+        let region_ver_id = pd_client.region_for_key(&amp;primary_key).await?.ver_id();
+        // skip if the region is cleaned
+        if clean_regions
+            .get(&amp;lock.lock_version)
+            .map(|regions| regions.contains(&amp;region_ver_id))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let commit_version = match commit_versions.get(&amp;lock.lock_version) {
+            Some(&amp;commit_version) =&gt; commit_version,
+            None =&gt; {
+                let commit_version = requests::new_cleanup_request(primary_key, lock.lock_version)
+                    .execute(pd_client.clone())
+                    .await?;
+                commit_versions.insert(lock.lock_version, commit_version);
+                commit_version
+            }
+        };
+
+        let cleaned_region = resolve_lock_with_retry(
+            lock.key.into(),
+            lock.lock_version,
+            commit_version,
+            pd_client.clone(),
+        )
+        .await?;
+        clean_regions
+            .entry(lock.lock_version)
+            .or_insert_with(HashSet::new)
+            .insert(cleaned_region);
+    }
+    Ok(!has_live_locks)
+}
+<span class="boring">}
+</span></code></pre></pre>
+<p>可见是先筛选出已经超过其持有期限的锁，然后逐个解决。</p>
+<p>然后就会获取 <code>lock_version</code> 对应的 <code>commit_version</code> （可能被缓存过），并用来发起 <code>cleanup_request</code>。</p>
+<p><code>Cleanup</code> 这东西据说4.0之后已经不用了，那我就不管了吧。</p>
+<p>然后就是重点：<code>resolve_lock_with_retry</code>，这个函数实际构造一个 <code>ResolveLockRequest</code>， 并发送给 TiKV 执行。</p>
+<p>我们转到 TiKV 的代码，你会发现这个请求先是被转换为 <code>TypedCommand</code>， 然后被 <code>sched_txn_command</code> 执行。</p>
+<p>根据 <code>Request</code> 上的 <code>key</code> 是否为空，会将 <code>ResolveLockRequest</code> 转换为 <code>ResolveLock</code> 或 <code>ResolveLockLite</code>。它们之间区别是 <code>ResolveLockLite</code> 只会尝试解决 <code>Request</code> 要求解决的那些锁，而 <code>ResolveLock</code> 似乎解决了整个 region 上的锁。</p>
+<p><code>ResolveLock</code> 这个command实际执行的位置比较难找，我找了好久终于发现它有两段，一段在<a href="https://github.com/TiKV/TiKV/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/process.rs#L416">这里</a>，负责读，还有一段在<a href="https://github.com/TiKV/TiKV/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/process.rs#L775">这里</a>，负责写，不过<a href="https://github.com/TiKV/TiKV/blob/82d180d120e115e69512ea7f944e93e6dc5022a0/src/storage/txn/commands.rs#L520">注释</a>已经解释了 <code>ResolveLock</code> 会做些什么。</p>
+<p>这两段依赖了 <code>MvccTxn</code> 和 <code>MvccReader</code>，本次限于篇幅不在展开，将在另外的文章中讲解。</p>
+<p>然后就可以返回到 client-rust 的 <code>resolve_locks</code> 函数，并继续下去，直到所有的 <code>expired_locks</code> 都被解决完了。</p>
+<p>然后就可以返回最终的 <code>Get</code> 结果了。（终于啊……）</p>
+<p>我们用一张数据流图总结这个过程：</p>
+<p><img src="handling/single-point-get-dfd.svg" alt="single-point-get-dfd" /></p>
 
                     </main>
 
