@@ -58,8 +58,6 @@ pub async fn get(&self, key: impl Into<Key>) -> Result<Option<Value>> {
 
 这里的代码似乎没有体现“确定数据在哪个 region /哪个 TiKV 实例”的步骤。
 
-But that's not ture. The code which do these jobs is hidden under [execute](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L33), and you'll find the the code which tries to get the TiKV node [here](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/pd/client.rs#L42) , and it is called by retry_response_stream [here](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L52):
-
 但是实际上这部分代码藏在[execute](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L33)下，你可以发现 `retry_response_stream` 在[这里](https://github.com/TiKV/client-rust/blob/b7ced1f44ed9ece4405eee6d2573a6ca6fa46379/src/request.rs#L52)调用了获取 TiKV 地址的代码。
 
 `GetRegion` 的实现在 pd 的[这里](https://github.com/pingcap/pd/blob/2b56a4c5915cb4b8806629193fd943a2e860ae4f/server/grpc_service.go#L414)。
